@@ -1,57 +1,83 @@
 // The E of KAPLAY
 
-import type { App } from "../app/app";
+/**
+ * KAPlay ECS (实体组件系统)的核心实现
+ * 
+ * 主要功能和特性:
+ * 1. 组件系统
+ *    - 支持命名组件和匿名组件
+ *    - 组件生命周期管理(add/destroy)
+ *    - 组件依赖检查和自动绑定
+ *    - 状态管理和资源清理
+ * 
+ * 2. 事件系统
+ *    - 固定更新(fixedUpdate)
+ *    - 逻辑更新(update)
+ *    - 渲染更新(draw)
+ *    - 自定义事件处理
+ * 
+ * 3. 层级系统
+ *    - 父子关系管理
+ *    - 变换继承
+ *    - 批量操作
+ */
+
+/**
+ * KAplay ECS (实体组件系统)核心模块
+ */
+
 import { COMP_DESC, COMP_EVENTS } from "../constants";
 import { handleErr } from "../core/errors";
 import { KEvent, KEventController, KEventHandler } from "../events/events";
-import { FrameBuffer } from "../gfx/classes/FrameBuffer";
-import { beginPicture, endPicture, Picture } from "../gfx/draw/drawPicture";
-import {
-    flush,
-    loadMatrix,
-    multRotate,
-    multScaleV,
-    multTranslateV,
-    popTransform,
-    pushMatrix,
-    pushTransform,
-    storeMatrix,
-} from "../gfx/stack";
 import { _k } from "../kaplay";
-import { Mat23, Vec2 } from "../math/math";
+import { Mat23 } from "../math/math";
 import { calcTransform } from "../math/various";
 import type {
     Comp,
     CompList,
     GameObj,
-    GameObjInspect,
+    GameObjBase,
     GameObjRaw,
     GetOpt,
     QueryOpt,
     Tag,
+    Transform
 } from "../types";
 import { uid } from "../utils/uid";
-import type { MaskComp } from "./components/draw/mask";
-import type { FixedComp } from "./components/transform/fixed";
-import type { PosComp } from "./components/transform/pos";
-import type { RotateComp } from "./components/transform/rotate";
-import type { ScaleComp } from "./components/transform/scale";
 
+/** 当前组件清理函数 */
+let onCurCompCleanup: ((cleanup: () => void) => void) | null = null;
+
+/** 是否将标签作为组件处理 */
+const treatTagsAsComponents = _k.globalOpt?.tagsAsComponents ?? false;
+
+/**
+ * 对象保持标记，用于设置父对象时保持哪些属性
+ */
 export enum KeepFlags {
-    Pos = 1,
-    Angle = 2,
-    Scale = 4,
-    All = 7,
+    Pos = 1,    // 保持世界坐标位置
+    Angle = 2,  // 保持世界旋转角度
+    Scale = 4,  // 保持世界缩放比例
+    All = 7,    // 保持所有属性(Pos | Angle | Scale)
 }
 
+/**
+ * 设置父对象选项
+ */
 export type SetParentOpt = {
-    keep: KeepFlags;
+    keep: KeepFlags;  // 保持哪些属性不变
 };
 
+/**
+ * 从App类型中提取所有事件处理器
+ */
 type AppEvents = keyof {
     [K in keyof App as K extends `on${any}` ? K : never]: [never];
 };
 
+/**
+ * 具有变换组件的游戏对象类型
+ */
 type GameObjTransform = GameObj<PosComp | RotateComp | ScaleComp>;
 
 /*
@@ -61,116 +87,87 @@ Order of making a game object:
 2. We create the GameObjRaw interface
 3. We call .use() or .tag() on elements in the compAndTags array
 */
+/**
+ * 创建游戏对象
+ * @param compsAndTags - 组件和标签数组
+ * @returns 新创建的游戏对象实例
+ * 
+ * 创建流程:
+ * 1. 生成唯一ID
+ * 2. 初始化组件和标签容器
+ * 3. 设置事件处理器
+ * 4. 绑定组件方法
+ */
 export function make<T extends CompList<unknown>>(
     compsAndTags: [...T],
 ): GameObj<T[number]> {
-    const id = uid();
-    const compIds = new Set<string>();
-    const compStates = new Map<string, Comp>();
-    const anonymousCompStates: Comp[] = [];
-    const cleanups = {} as Record<string, (() => unknown)[]>;
-    const events = new KEventHandler();
-    const fixedUpdateEvents = new KEvent<[]>();
-    const updateEvents = new KEvent<[]>();
-    const drawEvents = new KEvent<[]>();
-    const inputEvents: KEventController[] = [];
-    const tags = new Set<Tag>("*");
-    const treatTagsAsComponents = id == 0
-        ? false
-        : _k.globalOpt.tagsAsComponents;
-    let onCurCompCleanup: Function | null = null;
-    let paused = false;
-    let _parent: GameObj;
+    // 基础状态管理
+    const id = uid();                                    // 生成唯一ID
+    const compIds = new Set<string>();                  // 组件ID集合
+    const compStates = new Map<string, Comp>();         // 组件状态表
+    const anonymousCompStates: Comp[] = [];             // 匿名组件列表
+    const cleanups = {} as Record<string, (() => unknown)[]>;  // 清理函数表
+    
+    // 事件系统
+    const events = new KEventHandler();                 // 通用事件处理器
+    const fixedUpdateEvents = new KEvent<[]>();         // 固定更新事件
+    const updateEvents = new KEvent<[]>();              // 每帧更新事件  
+    const drawEvents = new KEvent<[]>();                // 渲染事件
+    const inputEvents: KEventController[] = [];         // 输入事件控制器
+    
+    // 标签系统
+    const tags = new Set<Tag>("*");                    // 标签集合(*表示通配符)
+    
+    // 变换系统
+    let _parent: GameObj = _k.game.root;               // 父对象引用
+    const _children: GameObj[] = [];                    // 子对象列表
 
-    // the game object without the event methods, added later
+    /**
+     * 游戏对象的原型定义
+     * 包含了所有核心方法的实现
+     */
     const obj = {
-        id: id,
-        // TODO: a nice way to hide / pause when add()-ing
-        hidden: false,
-        transform: new Mat23(),
-        children: [],
-
-        get parent() {
-            return _parent!;
-        },
-
-        set parent(p: GameObj) {
-            if (_parent === p) return;
-            const index = _parent
-                ? _parent.children.indexOf(this as GameObj)
-                : -1;
-            if (index !== -1) {
-                _parent.children.splice(index, 1);
-            }
-            _parent = p;
-            if (p) {
-                p.children.push(this as GameObj);
-            }
-        },
-
-        setParent(
-            this: GameObjTransform,
-            p: GameObj,
-            opt: SetParentOpt,
-        ) {
-            if (_parent === p) return;
-            const oldTransform = _parent.transform;
-            const newTransform = p.transform;
-            if ((opt.keep & KeepFlags.Pos) && this.pos !== undefined) {
-                oldTransform.transformPoint(this.pos, this.pos);
-                newTransform.inverse.transformPoint(this.pos, this.pos);
-            }
-            if ((opt.keep & KeepFlags.Angle) && this.angle !== undefined) {
-                this.angle += newTransform.getRotation()
-                    - oldTransform.getRotation();
-            }
-            if ((opt.keep & KeepFlags.Scale) && this.scale !== undefined) {
-                this.scale = this.scale.scale(
-                    oldTransform.getScale().invScale(newTransform.getScale()),
-                );
-            }
-            this.parent = p;
-        },
-
-        set paused(p) {
-            if (p === paused) return;
-            paused = p;
-            for (const e of inputEvents) {
-                e.paused = p;
-            }
-        },
-
-        get paused() {
-            return paused;
-        },
-
-        get tags() {
-            return Array.from(tags);
-        },
-
+        // 基础属性
+        id,                         // 对象ID
+        hidden: false,              // 是否隐藏
+        paused: false,              // 是否暂停
+        parent: _parent,            // 父对象引用
+        children: _children,        // 子对象列表
+        
+        /** 变换矩阵,用于渲染 */
+        transform: null as Mat23 | null,
+        
+        /** 
+         * 添加子对象
+         * @param a 要添加的组件和标签数组
+         * @returns 新创建的子对象
+         */
         add<T2 extends CompList<unknown>>(
             this: GameObj,
             a: [...T2],
         ): GameObj<T2[number]> {
             const obj = make(a);
-
+            
+            // 检查是否已有父对象
             if (obj.parent) {
-                throw new Error(
-                    "Cannot add a game obj that already has a parent.",
-                );
+                throw new Error("不能添加已有父对象的游戏对象");
             }
+            
+            // 设置父子关系
             obj.parent = this;
             calcTransform(obj, obj.transform);
-
+            
+            // 触发添加事件
             try {
                 obj.trigger("add", obj);
-                obj.children.forEach(c => c.trigger("add", c));
+                obj.children.forEach((c: GameObj) => c.trigger("add", c));
             } catch (e) {
                 handleErr(e);
             }
-
+            
+            // 触发全局添加事件
             _k.game.events.trigger("add", obj);
-
+            
             return obj;
         },
 
@@ -997,6 +994,7 @@ export function make<T extends CompList<unknown>>(
 
     // Adding components passed from add([]);
     // We register here: The objects, because you can also pass tags to add().
+
     let comps = [];
     let tagList = [];
 

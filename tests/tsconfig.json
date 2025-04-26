@@ -1,3 +1,49 @@
+/**
+ * =============================================================================
+ * == Kaplay.js 测试目录的 TypeScript 配置 ==
+ * =============================================================================
+ *
+ * 这个文件控制着Kaplay.js测试代码的TypeScript编译行为。
+ * 
+ * 想象一下这是游戏测试实验室的规则手册，告诉测试机器人应该如何理解和检查我们的代码。
+ * 
+ * 重要配置项解析：
+ * 
+ * - target & module: "ESNext" - 使用最新的ECMAScript语法和模块系统
+ *   这让我们可以使用最新的JavaScript特性，如异步/等待、可选链接等
+ * 
+ * - moduleResolution: "Node" - 使用Node.js风格的模块解析策略
+ *   这决定了TypeScript如何查找和识别导入的模块
+ * 
+ * - noImplicitThis: true - 禁止模糊不清的'this'用法
+ *   确保代码中的'this'关键字总是有明确的类型
+ * 
+ * - skipLibCheck: true - 跳过对声明文件(*.d.ts)的检查
+ *   这可以加快编译速度，特别是当项目依赖很多第三方库时
+ * 
+ * - declaration: true - 生成声明文件(.d.ts)
+ *   这些文件描述了代码的公共API，供其他TypeScript项目使用
+ * 
+ * - declarationMap: true - 为声明文件生成源映射
+ *   这有助于调试，可以让你在使用时导航到原始源代码
+ * 
+ * - verbatimModuleSyntax: true - 强制使用明确的导入类型语法
+ *   这要求使用'import type'语法导入类型，使类型导入和值导入明确区分
+ * 
+ * - strict: true - 启用所有严格类型检查选项
+ *   这是TypeScript最强大的特性之一，可以捕获更多潜在错误
+ * 
+ * - types: 指定要包含的类型定义
+ *   - "./.env.d.ts" - 项目自定义的环境变量类型
+ *   - "../node_modules/vitest-puppeteer/dist/index.d.ts" - Vitest的Puppeteer集成类型
+ * 
+ * - include: 指定要编译的文件
+ *   "./**/*" - 测试目录下的所有文件
+ * 
+ * 小朋友可以这样理解：这个文件就像是告诉计算机"这些测试代码使用了特殊的语言规则，
+ * 你需要按照这些规则来理解它们，这样才能正确判断游戏是否按照我们的期望工作"。
+ */
+
 {
   "compilerOptions": {
     "esModuleInterop": true,
